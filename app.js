@@ -100,6 +100,13 @@
     return m ? m[1] : '';
   }
 
+  /* La app clasica de xbox.com (parcheable por Better xCloud) lleva este meta.
+     Si no aparece, es la app nueva "Play XBOX" (play.xbox.com): no se puede
+     parchear, asi que se abre la URL real y listo. */
+  function isClassicApp(html) {
+    return /gamepass-app-version/.test(html || '');
+  }
+
   /* ----------------------------- pagina ------------------------------ */
 
   function looksUnsupported(html) {
@@ -133,7 +140,7 @@
     var i = 0;
 
     function next() {
-      if (i >= list.length) return Promise.reject(new Error('Ninguna region disponible'));
+      if (i >= list.length) return Promise.resolve({ html: '', url: 'https://play.xbox.com/library' });
       var region = list[i++];
       var url = 'https://www.xbox.com/' + region + '/play';
       setStatus('Conectando con Xbox Cloud Gaming', url);
@@ -308,7 +315,7 @@
 
   function openAndWrite(doc) {
     if (!ensureChild()) {
-      pendingDoc = doc;
+      pendingDoc = function () { openAndWrite(doc); };
       setStatus('Pulsa una tecla del control', 'Se necesita permiso para abrir la ventana de Xbox');
       return;
     }
@@ -326,27 +333,66 @@
 
   /* ------------------------------ flujo ------------------------------ */
 
+  function openDirect(url) {
+    if (!ensureChild()) {
+      pendingDoc = function () { openDirect(url); };
+      setStatus('Pulsa una tecla del control', 'Se necesita permiso para abrir la ventana de Xbox');
+      return;
+    }
+    pendingDoc = null;
+    setStatus('Abriendo Xbox...', url);
+    try {
+      child.location.replace(url);
+    } catch (e) {
+      try { child.close(); } catch (e2) { /* noop */ }
+      child = null;
+      try { child = window.open(url, WIN_NAME, WIN_FEATURES); } catch (e3) { child = null; }
+    }
+    if (!child || child.closed) {
+      fail('No se pudo abrir Xbox', 'Pulsa ROJO en el control para reintentar.');
+      return;
+    }
+    showSpinner(false);
+    setStatus('Xbox abierto', 'ROJO = recargar  ·  EXIT = salir');
+    try { child.focus(); } catch (e4) { /* noop */ }
+  }
+
+  function openTarget() {
+    if (pageInfo && !isClassicApp(pageInfo.html)) {
+      var url = pageInfo.url || 'https://play.xbox.com/library';
+      try {
+        var a = document.createElement('a');
+        a.href = url;
+        if (a.host === 'play.xbox.com' && (a.pathname === '/' || a.pathname === '')) {
+          url = 'https://play.xbox.com/library';
+        }
+      } catch (e) { /* noop */ }
+      openDirect(url);
+    } else {
+      openAndWrite(buildDoc(pageInfo));
+    }
+  }
+
   function start() {
     if (busy) return;
     busy = true;
     showSpinner(true);
     setStatus('Iniciando Better xCloud', '');
 
-    var tasks = [];
+    var pageTask = pageInfo ? Promise.resolve(pageInfo) : fetchPage();
 
-    if (!bxSrc) {
-      tasks.push(loadScriptSource().then(function (t) {
+    pageTask.then(function (p) {
+      pageInfo = p;
+      if (!isClassicApp(p.html)) return null;
+      if (bxSrc) return null;
+      setStatus('Descargando Better xCloud', '');
+      return loadScriptSource().then(function (t) {
         bxSrc = t;
         bxVersion = versionOf(t);
-      }));
-    }
-    if (!pageInfo) {
-      tasks.push(fetchPage().then(function (p) { pageInfo = p; }));
-    }
-
-    Promise.all(tasks).then(function () {
+      });
+    }).then(function () {
       busy = false;
-      openAndWrite(buildDoc(pageInfo));
+      openTarget();
     }).catch(function (e) {
       busy = false;
       fail('No se pudo iniciar Better xCloud', (e && e.message ? e.message : String(e)) + ' · ROJO = reintentar');
@@ -360,11 +406,8 @@
     child = null;
     closing = false;
     showSpinner(true);
-    if (bxSrc && pageInfo) {
-      openAndWrite(buildDoc(pageInfo));
-    } else {
-      start();
-    }
+    if (pageInfo) openTarget();
+    else start();
   }
 
   function exitApp() {
@@ -386,7 +429,9 @@
   function onKey(ev) {
     var k = ev.keyCode;
     if (pendingDoc && k !== 10182) {
-      openAndWrite(pendingDoc);
+      var pending = pendingDoc;
+      pendingDoc = null;
+      pending();
       return;
     }
     if (k === 403 || k === 405 || k === 427) reloadApp();
@@ -395,7 +440,11 @@
 
   document.addEventListener('keydown', onKey, true);
   document.addEventListener('click', function () {
-    if (pendingDoc) openAndWrite(pendingDoc);
+    if (pendingDoc) {
+      var pending = pendingDoc;
+      pendingDoc = null;
+      pending();
+    }
   });
 
   setInterval(function () {
