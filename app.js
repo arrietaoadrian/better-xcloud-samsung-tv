@@ -26,6 +26,7 @@
   var closing = false;
 
   var DEV = /[?&]dev=1/.test(location.search);
+  var PLAY_URL = 'https://play.xbox.com/library';
 
   function setStatus(a, b) {
     if (elStatus) elStatus.textContent = a || '';
@@ -114,19 +115,26 @@
   }
 
   function fetchRegion(url) {
-    return request(url, {
-      credentials: true,
-      headers: { 'Accept': 'text/html,application/xhtml+xml' }
-    }).then(function (r) {
-      if (!r.text || r.text.length < 5000) throw new Error('respuesta vacia');
+    var headers = { 'Accept': 'text/html,application/xhtml+xml' };
+    function ok(r) {
+      if (!r || !r.text || r.text.length < 5000) throw new Error('respuesta vacia');
       return { html: r.text, url: r.url || url };
+    }
+    return request(url, { credentials: true, headers: headers }).then(function (r) {
+      if (isClassicApp(r.text)) return ok(r);
+      /* Con cookies, xbox.com suele devolver la app nueva. Sin cookies sirve
+         la app clasica (la que Better xCloud puede parchear). */
+      return request(url, { headers: headers }).then(function (r2) {
+        if (isClassicApp(r2.text)) return ok(r2);
+        return ok(r);
+      }, function () { return ok(r); });
     });
   }
 
   function fetchPage() {
     if (DEV) {
       return request('page-dev.html').then(function (r) {
-        return { html: r.text, url: (/([?&]base=[^&]+)/.exec(location.search) || [])[1] || 'https://www.xbox.com/es-MX/play' };
+        return { html: r.text, url: 'https://www.xbox.com/es-MX/play' };
       });
     }
 
@@ -138,19 +146,30 @@
     REGIONS.forEach(function (r) { if (list.indexOf(r) < 0) list.push(r); });
 
     var i = 0;
+    var fallback = null;
+
+    function remember(region) {
+      try { localStorage.setItem(LS_REGION, region); } catch (e) { /* noop */ }
+    }
 
     function next() {
-      if (i >= list.length) return Promise.resolve({ html: '', url: 'https://play.xbox.com/library' });
+      if (i >= list.length) {
+        return Promise.resolve(fallback || { html: '', url: 'https://play.xbox.com/library' });
+      }
       var region = list[i++];
       var url = 'https://www.xbox.com/' + region + '/play';
       setStatus('Conectando con Xbox Cloud Gaming', url);
       return fetchRegion(url).then(function (p) {
+        if (isClassicApp(p.html)) {
+          remember(region);
+          return p;
+        }
         if (looksUnsupported(p.html)) {
           log('region no soportada: ' + region);
           return next();
         }
-        try { localStorage.setItem(LS_REGION, region); } catch (e) { /* noop */ }
-        return p;
+        if (!fallback) fallback = p;
+        return next();
       }, function (e) {
         log('fallo ' + region + ': ' + e.message);
         return next();
@@ -168,6 +187,7 @@
       '  "use strict";',
       '  var BASE = ' + JSON.stringify(baseUrl) + ';',
       '  var OP = window.opener;',
+      '  try { var u0 = new URL(BASE); history.replaceState(null, "", u0.pathname || "/"); } catch (e) {}',
       '  function send(action) { try { if (OP && OP.postMessage) OP.postMessage({ action: action }, "*"); } catch (e) {} }',
       '',
       '  try {',
@@ -251,7 +271,14 @@
   }
 
   function buildDoc(info) {
-    var doc = new DOMParser().parseFromString(info.html, 'text/html');
+    /* La app clasica de xbox.com se auto-redirige a la app nueva (play.xbox.com)
+       cuando esta bandera viene en window.env. La apagamos para quedarnos con la
+       version que Better xCloud si puede parchear (incluye bypass de region). */
+    var html = String(info.html || '')
+      .replace(/"FORCE_REDIRECT_PRODUCTION_ORIGIN"\s*:\s*"true"/g, '"FORCE_REDIRECT_PRODUCTION_ORIGIN":"false"')
+      .replace(/"FORCE_REDIRECT_PRODUCTION_ORIGIN"\s*:\s*true/g, '"FORCE_REDIRECT_PRODUCTION_ORIGIN":false');
+
+    var doc = new DOMParser().parseFromString(html, 'text/html');
     var head = doc.head || doc.getElementsByTagName('head')[0];
     var nodes, i;
 
@@ -291,11 +318,16 @@
     if (child && !child.closed) return true;
     try {
       child = window.open('about:blank', WIN_NAME, WIN_FEATURES);
+      dbgChild(child);
     } catch (e) {
       log('window.open fallo: ' + e.message);
       child = null;
     }
     return !!(child && !child.closed);
+  }
+
+  function dbgChild(c) {
+    try { window.__bxChild = c; } catch (e) { /* noop */ }
   }
 
   function writeDoc(html) {
@@ -377,8 +409,15 @@
     if (busy) return;
     busy = true;
     showSpinner(true);
-    setStatus('Iniciando Better xCloud', '');
+    /* La app clasica de xbox.com ya no se puede parchear desde un widget:
+       si se reescribe en otro documento, responde 404. Se abre directo la
+       app nueva de Xbox, que si funciona a pantalla completa. */
+    setStatus('Abriendo Xbox Cloud Gaming', PLAY_URL);
+    busy = false;
+    openDirect(PLAY_URL);
+  }
 
+  function startLegacy() {
     var pageTask = pageInfo ? Promise.resolve(pageInfo) : fetchPage();
 
     pageTask.then(function (p) {
