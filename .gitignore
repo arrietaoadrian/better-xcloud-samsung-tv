@@ -1,0 +1,4 @@
+*.wgt
+*.zip
+Thumbs.db
+.DS_Store
