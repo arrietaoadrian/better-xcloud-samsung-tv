@@ -1,85 +1,96 @@
 # Better xCloud para Samsung TV (Tizen)
 
-Aplicación **Tizen (`.wgt`)** que abre **Xbox Cloud Gaming** (`xbox.com/<región>/play`) dentro de la TV e inyecta el userscript de [Better xCloud](https://github.com/redphx/better-xcloud) **antes** de que se ejecute cualquier script de Xbox.
+Dos formas de tener **Xbox Cloud Gaming + Better xCloud** en una TV Samsung, pensadas
+para regiones donde Xbox Cloud está restringido (p. ej. Colombia):
 
-Pensada para TVs Samsung que **no** tienen inyección de userscripts nativa (a diferencia de webOS). Se instala con [Apps2Samsung](https://github.com/Apps2Samsung/Apps2Samsung), que firma e instala el paquete.
+| Forma | Qué obtienes | Cómo se instala |
+| --- | --- | --- |
+| **Módulo TizenBrew** (recomendado) | Better xCloud inyectado en el origen real + **bypass de región a Estados Unidos** + menú completo (servidor, bitrate, resolución, idioma…) | desde TizenBrew, con la URL de este repo |
+| **App `.wgt`** | lanzador que abre Xbox Cloud Gaming a pantalla completa | con Apps2Samsung (firma el paquete) |
 
-> Proyecto no oficial. Sin relación con Microsoft/Xbox. Better xCloud es de [redphx](https://github.com/redphx/better-xcloud) (licencia MIT).
+> Proyecto no oficial. Sin relación con Microsoft/Xbox. Better xCloud es de
+> [redphx](https://github.com/redphx/better-xcloud) (MIT).
 
 ---
 
-## Descarga e instalación
+## 1. Módulo TizenBrew (el que sí arregla la región)
+
+Requisito: TV con [TizenBrew](https://github.com/reisxd/TizenBrew) y modo desarrollador.
+
+1. TizenBrew → **Modules**
+2. Añadir módulo con:
+   ```
+   https://github.com/arrietaoadrian/better-xcloud-samsung-tv
+   ```
+3. Instalar. Aparece como **Better xCloud (region US)**.
+4. Desactiva/elimina el módulo `marcusvitalesilva-dot/tizenbrew-better-xcloud` para evitar conflictos.
+5. Abre el módulo, inicia sesión en Microsoft y entra por **Biblioteca → Fortnite**.
+
+Qué hace el módulo:
+
+1. Inyecta el userscript **antes** de cualquier script de Xbox
+   (`Page.addScriptToEvaluateOnNewDocument` vía DevTools local del TizenBrew).
+2. Fuerza `FORCE_REDIRECT_PRODUCTION_ORIGIN = false` interceptando `window.env`, para que
+   la app clásica (la única que Better xCloud puede parchear) no salte a `play.xbox.com`.
+3. Bloquea navegaciones a `play.xbox.com` (clics y `location.assign/replace`).
+4. Preconfigura `BetterXcloud.server.bypassRestriction = "us"`: las peticiones a xCloud
+   salen con `X-Forwarded-For` de un nodo de EE. UU. (`143.244.47.65`), lo que habilita
+   el botón **Jugar** aunque la cuenta esté en Colombia.
+5. Marca `BX_FLAGS.DeviceInfo.deviceType = "tv"` para la UI con control remoto.
+
+En el menú de Better xCloud (botón flotante / ⚙): **Server → Bypass region restriction**
+ya viene en **United States**. Ahí también puedes cambiar servidor, bitrate, resolución e
+idioma del stream, igual que en Android.
+
+### Archivos del módulo
+
+```
+package.json     manifiesto TizenBrew (main: bx-wrapper.js, serviceFile: service.js)
+bx-wrapper.js    prefijo interceptor + better-xcloud.user.js 6.7.13
+service.js       servicio DevTools que inyecta el script al inicio de cada documento
+```
+
+`service.js` existe porque TizenBrew 2.0.5 no consigue inyectar con
+`evaluateScriptOnDocumentStart`; el servicio descubre el puerto de depuración leyendo
+`/proc/net/tcp` y usa CDP directamente.
+
+---
+
+## 2. App `.wgt` (lanzador)
 
 1. Descarga el `.wgt` desde [Releases](../../releases/latest).
-2. Abre **Apps2Samsung** y conecta la TV (modo desarrollador activo).
-3. Selecciona **instalar app propia / archivo `.wgt`** y elige `Better-xCloud-TV.wgt`.
-4. Apps2Samsung firma el paquete con tu cuenta Samsung e instala la app.
-5. En la TV aparecerá como **Better xCloud**.
+2. Abre **Apps2Samsung**, conecta la TV (modo desarrollador activo).
+3. Instala app propia → elige `Better-xCloud-TV.wgt`. Apps2Samsung lo firma con tu cuenta Samsung.
+4. En la TV aparece como **Better xCloud**.
 
-## Uso
+Comportamiento:
 
-- La app descarga la página de Xbox, la reescribe en su propia ventana e inyecta Better xCloud en el `<head>`.
-- Muestra el aviso **"Better xCloud X.Y.Z activo"** cuando la inyección tuvo éxito.
-- Si aparece la pantalla de **inicio de sesión de Microsoft**, inicia sesión normalmente y, al volver a la biblioteca de juegos, pulsa **ROJO** para recargar con Better xCloud inyectado (la sesión queda guardada).
-- Si sale el aviso *"Pulsa una tecla del control"*, pulsa **OK**: es el permiso de ventana de Tizen (`window.open` requiere interacción).
+- Descarga `https://www.xbox.com/<región>/play` (prueba `es-MX`, `pt-BR`, `en-US`…).
+- Si Xbox sirve la **app clásica** → la reescribe en su ventana e inyecta Better xCloud.
+- Si sirve la **app nueva** (`play.xbox.com`) → abre directamente
+  `https://play.xbox.com/library`.
 
-### Teclas
+**Teclas:** ROJO / AZUL / CANAL+ = recargar · EXIT / CANAL− = salir.
 
-| Tecla | Acción |
-| --- | --- |
-| ROJO / AZUL / CANAL+ | Recargar (reinyectar Better xCloud) |
-| EXIT / CANAL− | Salir de la app |
+### Limitación real del `.wgt`
 
-## Cómo funciona
+Un widget Tizen **no puede inyectar código en un origen ajeno**: la única vía es
+`fetch` + `document.write`, y la app clásica de Xbox detecta que vive en otro documento y
+responde **404** ("No se encontró la página. Código de error…"). Por eso el `.wgt` es solo
+un lanzador, y el bypass de región / menú de Better xCloud se consigue con el módulo de
+TizenBrew.
 
-```
-index.html + app.js          (loader, fullscreen)
-        │
-        ├─ XHR  better-xcloud.user.js   (local, con fallback a jsDelivr)
-        ├─ XHR  https://www.xbox.com/<región>/play   (con cookies, sigue redirecciones)
-        │        └─ prueba es-MX y luego pt-BR si la región no está soportada
-        │
-        └─ window.open('about:blank') + document.write(
-                <base href="URL final de Xbox">
-                <script> preámbulo (teclas, toast, historial) </script>
-                <script> better-xcloud.user.js </script>
-                …HTML original…
-           )
-```
+---
 
-Detalles relevantes del preámbulo:
+## Cómo se construye el `.wgt`
 
-- `<base href>` apunta a la URL real para que los recursos relativos resuelvan a `xbox.com`.
-- `history.pushState` / `replaceState` se envuelven para relativizar URLs absolutas de Xbox y evitar `SecurityError` (el documento vive en el origen `tizen://`).
-- `window.BX_FLAGS.DeviceInfo.deviceType = "tv"` para activar la UI amigable con control.
-- Las teclas se registran con `tizen.tvinputdevice` y se comunican al loader por `postMessage`.
-
-## Limitaciones conocidas
-
-- Es la técnica de *fetch + document.write* usada por los `.wgt` del catálogo de Apps2Samsung (p. ej. TizenTube). Funciona, pero Xbox es una SPA autenticada: el login puede requerir recargar (tecla ROJO) y depende de que Tizen permita cookies de terceros desde el origen de la app.
-- Microsoft está desplegando una app nueva ("Play XBOX", Next.js) en algunas regiones; Better xCloud solo parchea la app clásica (`gamepass-app-version`). Si la región devuelve la app nueva, Better xCloud no tendrá efecto.
-- Alternativa más robusta y ya probada en Tizen: **TizenBrew** + módulo `tizenbrew-better-xcloud` (inyección por DevTools en el origen real de Xbox).
-
-## Estructura
-
-```
-config.xml               manifiesto Tizen (id BxCl0udApp.BetterXcloud)
-index.html               pantalla de carga
-app.js                   lógica del loader
-better-xcloud.user.js    userscript empaquetado (MIT, redphx)
-icon.png                 512×512
-```
-
-Para reconstruir el `.wgt`: comprimir el contenido de esta carpeta en un ZIP con `config.xml` en la raíz y renombrarlo a `.wgt`.
-
-## Si el .wgt no basta (región bloqueada)
-
-Microsoft está migrando Xbox Cloud Gaming a `play.xbox.com`, que Better xCloud no puede parchear. Para forzar la región **Estados Unidos** y tener el menú completo de Better xCloud en la TV, usa el módulo de TizenBrew:
-
-**https://github.com/arrietaoadrian/tizenbrew-bx-region**
+Comprimir el contenido de esta carpeta en un ZIP con `config.xml` en la raíz y renombrarlo
+a `.wgt` (los archivos del módulo TizenBrew pueden quedarse; el widget ignora lo que no
+aparece en `config.xml`).
 
 ## Créditos y licencia
 
 - Better xCloud © [redphx](https://github.com/redphx/better-xcloud) — MIT.
-- Técnica de carga adaptada de [no-cover/youtube-dummy](https://github.com/no-cover/youtube-dummy).
+- Servicio DevTools adaptado de [marcusvitalesilva-dot/tizenbrew-better-xcloud](https://github.com/marcusvitalesilva-dot/tizenbrew-better-xcloud) — MIT.
+- Técnica de carga del `.wgt` adaptada de [no-cover/youtube-dummy](https://github.com/no-cover/youtube-dummy).
 - Este proyecto: MIT (ver `LICENSE`).

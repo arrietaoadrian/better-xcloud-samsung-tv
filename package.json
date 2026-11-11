@@ -1,0 +1,13 @@
+{
+  "name": "tizenbrew-bx-region",
+  "appName": "Better xCloud (region US)",
+  "version": "6.7.13-1",
+  "description": "Better xCloud 6.7.13 (redphx) para TizenBrew con bypass de region forzado a Estados Unidos",
+  "packageType": "mods",
+  "websiteURL": "https://www.xbox.com/es-MX/play",
+  "main": "bx-wrapper.js",
+  "serviceFile": "service.js",
+  "keys": [],
+  "author": "redphx (Better xCloud); empaquetado TizenBrew: arrietaoadrian",
+  "license": "MIT"
+}
